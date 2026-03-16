@@ -4,6 +4,7 @@ packages:
   - bin
   - doc
   - ui
+  - local_plugins/*
 onlyBuiltDependencies:
   - '@scarf/scarf'
   - '@swc/core'
