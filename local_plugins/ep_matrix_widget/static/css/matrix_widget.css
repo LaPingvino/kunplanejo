@@ -1,0 +1,26 @@
+/* ep_matrix_widget - Matrix widget embedding styles */
+
+/* When embedded in a Matrix client, hide the Etherpad toolbar items
+   that don't make sense in the widget context (e.g. "return to index") */
+body.matrix-widget-embedded #editbar .buttonicon-history,
+body.matrix-widget-embedded #editbar .buttonicon-settings {
+  display: none;
+}
+
+/* Matrix user badge shown in the user list */
+.matrix-user-badge {
+  display: inline-block;
+  background: #0dbd8b;
+  color: #fff;
+  font-size: 10px;
+  border-radius: 3px;
+  padding: 1px 4px;
+  margin-left: 4px;
+  vertical-align: middle;
+}
+
+/* Compact mode when height is constrained (common in widget sidebars) */
+@media (max-height: 400px) {
+  #editbar { padding: 2px 4px; }
+  #editbar .buttonicon { width: 22px; height: 22px; }
+}

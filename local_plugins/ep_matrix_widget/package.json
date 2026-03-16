@@ -1,0 +1,15 @@
+{
+  "name": "ep_matrix_widget",
+  "version": "0.1.0",
+  "description": "Matrix widget integration for Etherpad: picks up user identity from Matrix context",
+  "main": "src/index.js",
+  "keywords": ["etherpad", "ep_", "matrix", "widget"],
+  "license": "Apache-2.0",
+  "dependencies": {
+    "matrix-widget-api": "^1.10.0"
+  },
+  "scripts": {},
+  "engines": {
+    "node": ">=18"
+  }
+}

@@ -1,0 +1,155 @@
+/* ep_rizzoma - Rizzoma-inspired UI styles */
+
+/* ── Thread panel ──────────────────────────────────────────────────────────── */
+#rz-thread-panel {
+  position: fixed;
+  right: 0;
+  top: 0;
+  bottom: 0;
+  width: 320px;
+  background: #fff;
+  border-left: 2px solid #4a90d9;
+  box-shadow: -4px 0 16px rgba(0,0,0,0.12);
+  display: none;
+  flex-direction: column;
+  z-index: 10000;
+  font-family: sans-serif;
+  font-size: 14px;
+}
+
+#rz-thread-panel.rz-visible {
+  display: flex;
+}
+
+#rz-thread-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 12px 16px;
+  background: #4a90d9;
+  color: #fff;
+}
+
+#rz-thread-close {
+  background: transparent;
+  border: none;
+  color: #fff;
+  font-size: 18px;
+  cursor: pointer;
+  line-height: 1;
+  padding: 0 4px;
+}
+
+#rz-thread-messages {
+  flex: 1;
+  overflow-y: auto;
+  padding: 12px 16px;
+}
+
+.rz-reply {
+  margin-bottom: 12px;
+  padding-bottom: 12px;
+  border-bottom: 1px solid #eee;
+}
+
+.rz-reply-author {
+  font-weight: bold;
+  color: #4a90d9;
+}
+
+.rz-reply-time {
+  font-size: 11px;
+  color: #888;
+  margin-left: 8px;
+}
+
+.rz-reply p {
+  margin: 4px 0 0;
+}
+
+#rz-thread-input-area {
+  padding: 12px 16px;
+  border-top: 1px solid #ddd;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+#rz-thread-input {
+  width: 100%;
+  box-sizing: border-box;
+  border: 1px solid #ccc;
+  border-radius: 4px;
+  padding: 6px 8px;
+  resize: vertical;
+  font-size: 13px;
+}
+
+#rz-thread-send {
+  align-self: flex-end;
+  background: #4a90d9;
+  color: #fff;
+  border: none;
+  border-radius: 4px;
+  padding: 6px 16px;
+  cursor: pointer;
+  font-size: 13px;
+}
+
+#rz-thread-send:hover {
+  background: #357abd;
+}
+
+/* ── Thread trigger button on each line ───────────────────────────────────── */
+.ace-line {
+  position: relative;
+}
+
+.rz-thread-btn {
+  position: absolute;
+  right: -28px;
+  top: 50%;
+  transform: translateY(-50%);
+  background: transparent;
+  border: none;
+  cursor: pointer;
+  font-size: 16px;
+  opacity: 0;
+  transition: opacity 0.15s;
+  padding: 2px;
+  line-height: 1;
+}
+
+.ace-line:hover .rz-thread-btn {
+  opacity: 0.6;
+}
+
+.rz-thread-btn:hover {
+  opacity: 1 !important;
+}
+
+/* ── Task checkboxes ───────────────────────────────────────────────────────── */
+.rz-task-checkbox {
+  cursor: pointer;
+  font-size: 16px;
+  margin-right: 4px;
+  user-select: none;
+}
+
+.rz-task-done {
+  text-decoration: line-through;
+  color: #888;
+}
+
+/* ── Gadget placeholders ───────────────────────────────────────────────────── */
+.rz-gadget {
+  display: block;
+  margin: 4px 0;
+  padding: 8px 12px;
+  background: #f5f8ff;
+  border: 1px dashed #4a90d9;
+  border-radius: 4px;
+  color: #4a90d9;
+  font-style: italic;
+  font-size: 13px;
+}

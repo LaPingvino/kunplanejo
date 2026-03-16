@@ -1,0 +1,13 @@
+{
+  "name": "ep_rizzoma",
+  "version": "0.1.0",
+  "description": "Rizzoma-inspired features for Etherpad: threaded discussions, task tracking, gadgets",
+  "main": "src/index.js",
+  "keywords": ["etherpad", "ep_", "rizzoma", "tasks", "threads"],
+  "license": "Apache-2.0",
+  "dependencies": {},
+  "scripts": {},
+  "engines": {
+    "node": ">=18"
+  }
+}
