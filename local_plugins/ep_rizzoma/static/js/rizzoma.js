@@ -1,14 +1,16 @@
 /**
- * ep_rizzoma - Client-side Rizzoma-inspired features
+ * ep_rizzoma - Rizzoma-inspired features for Etherpad
  *
- * Architecture notes:
- *  - NEVER modify the ace_inner contenteditable DOM directly; Etherpad's own
- *    MutationObserver will treat changes as user input and multiply them.
- *  - Thread button: a single floating overlay in the ace_outer frame,
- *    positioned by tracking mousemove over the editor.
- *  - Thread panel: in the outer pad frame.
- *  - Task checkboxes: via the aceCreateDomLine hook (inner frame, non-editable
- *    region added by Etherpad's own line rendering pipeline).
+ * Toolbar buttons:
+ *   💬  Open discussion thread anchored to the current line
+ *   ☐   Insert / toggle a task marker on the current line
+ *
+ * Thread panel:  slide-in sidebar in the outer pad frame
+ * Task display:  aceCreateDomLine hook adds a read-only checkbox span
+ *
+ * Rules to keep Etherpad sane:
+ *   - Never modify ace_inner's contenteditable DOM from outside Etherpad hooks
+ *   - CSS is injected dynamically into each frame that needs it
  */
 
 'use strict';
@@ -16,12 +18,28 @@
 // ── CSS ───────────────────────────────────────────────────────────────────────
 
 function injectCSS(doc, css) {
+  if (!doc || !doc.head) return;
   const s = doc.createElement('style');
   s.textContent = css;
-  (doc.head || doc.documentElement).appendChild(s);
+  doc.head.appendChild(s);
 }
 
 const OUTER_CSS = `
+/* Rizzoma toolbar buttons */
+.rz-toolbar-btn {
+  font-size: 17px;
+  line-height: 1;
+  cursor: pointer;
+  padding: 0 6px;
+  background: transparent;
+  border: none;
+  vertical-align: middle;
+  opacity: 0.75;
+  transition: opacity .1s;
+}
+.rz-toolbar-btn:hover { opacity: 1; }
+
+/* Thread panel */
 #rz-thread-panel {
   position: fixed; right: 0; top: 0; bottom: 0; width: 320px;
   background: #fff; border-left: 2px solid #4a90d9;
@@ -36,7 +54,7 @@ const OUTER_CSS = `
 }
 #rz-thread-close {
   background: transparent; border: none; color: #fff;
-  font-size: 18px; cursor: pointer; padding: 0 4px; line-height: 1;
+  font-size: 18px; cursor: pointer; padding: 0 4px;
 }
 #rz-thread-messages { flex: 1; overflow-y: auto; padding: 12px 16px; }
 .rz-reply { margin-bottom: 12px; padding-bottom: 12px; border-bottom: 1px solid #eee; }
@@ -58,50 +76,43 @@ const OUTER_CSS = `
 #rz-thread-send:hover { background: #357abd; }
 `;
 
-// CSS for the floating thread button, injected into ace_outer
-const ACE_OUTER_CSS = `
-#rz-float-btn {
-  position: absolute; right: 6px;
-  background: transparent; border: none; cursor: pointer;
-  font-size: 18px; opacity: 0; transition: opacity .15s;
-  z-index: 100; pointer-events: auto; line-height: 1; padding: 2px 4px;
-  display: none;
+const INNER_CSS = `
+/* Task checkboxes added by aceCreateDomLine — these are outside the editable span */
+.rz-cb {
+  cursor: default;
+  margin-right: 4px;
+  user-select: none;
+  font-size: 1em;
 }
-#rz-float-btn.rz-visible { display: block; }
-#rz-float-btn:hover { opacity: 1 !important; }
+.rz-task-line .rz-cb { cursor: pointer; }
 `;
 
-// CSS for task checkboxes, injected into ace_inner
-const ACE_INNER_CSS = `
-.rz-cb { cursor: pointer; margin-right: 4px; user-select: none; }
-.rz-done { text-decoration: line-through; color: #888; }
-`;
-
-// ── Thread panel (outer pad frame) ───────────────────────────────────────────
+// ── Thread panel ──────────────────────────────────────────────────────────────
 
 let threadPanel = null;
-let activeThreadId = null;
 
 function getThreadPanel() {
   if (threadPanel) return threadPanel;
+  const $ = window.$;
   threadPanel = document.createElement('div');
   threadPanel.id = 'rz-thread-panel';
   threadPanel.innerHTML =
-    '<div id="rz-thread-header"><strong>Discussion</strong>' +
-    '<button id="rz-thread-close">\u00d7</button></div>' +
+    '<div id="rz-thread-header"><strong>Discussion thread</strong>' +
+    '<button id="rz-thread-close" title="Close">\xd7</button></div>' +
     '<div id="rz-thread-messages"></div>' +
     '<div id="rz-thread-input-area">' +
     '<textarea id="rz-thread-input" rows="3" placeholder="Reply\u2026"></textarea>' +
     '<button id="rz-thread-send">Send</button></div>';
   document.body.appendChild(threadPanel);
-  threadPanel.querySelector('#rz-thread-close').addEventListener('click', closeThread);
-  threadPanel.querySelector('#rz-thread-send').addEventListener('click', sendReply);
+  document.getElementById('rz-thread-close').addEventListener('click', closeThread);
+  document.getElementById('rz-thread-send').addEventListener('click', sendReply);
   return threadPanel;
 }
 
-function openThread(threadId) {
-  activeThreadId = threadId;
+function openThread(lineKey) {
   const panel = getThreadPanel();
+  panel.querySelector('#rz-thread-header strong').textContent =
+    'Thread: line ' + (lineKey || '?');
   const box = panel.querySelector('#rz-thread-messages');
   box.innerHTML = '<em>No replies yet. Start the discussion below.</em>';
   panel.classList.add('rz-visible');
@@ -111,12 +122,12 @@ function openThread(threadId) {
   fetch('/rizzoma/threads/' + encodeURIComponent(padId))
     .then((r) => r.json())
     .then((data) => {
-      const thread = (data.threads || []).find((t) => t.id === threadId);
+      const thread = (data.threads || []).find((t) => t.id === lineKey);
       if (!thread || !thread.replies || !thread.replies.length) return;
       box.innerHTML = thread.replies.map((r) =>
-        '<div class="rz-reply"><span class="rz-reply-author">' + esc(r.author) + '</span>' +
-        '<span class="rz-reply-time">' + new Date(r.time).toLocaleString() + '</span>' +
-        '<p>' + esc(r.text) + '</p></div>'
+        '<div class="rz-reply"><span class="rz-reply-author">' + esc(r.author) +
+        '</span><span class="rz-reply-time">' + new Date(r.time).toLocaleString() +
+        '</span><p>' + esc(r.text) + '</p></div>'
       ).join('');
     })
     .catch(() => {});
@@ -124,129 +135,117 @@ function openThread(threadId) {
 
 function closeThread() {
   if (threadPanel) threadPanel.classList.remove('rz-visible');
-  activeThreadId = null;
 }
 
 function sendReply() {
-  const input = threadPanel && threadPanel.querySelector('#rz-thread-input');
+  const input = document.getElementById('rz-thread-input');
   if (!input || !input.value.trim()) return;
-  // TODO: persist via REST + ACE attributes
+  // TODO: persist via REST
   input.value = '';
 }
 
-// ── Floating thread button in ace_outer ──────────────────────────────────────
+// ── Toolbar buttons ───────────────────────────────────────────────────────────
 
-function setupFloatButton(aceOuterDoc) {
-  injectCSS(aceOuterDoc, ACE_OUTER_CSS);
+exports.postToolbarInit = (hookName, {toolbar, ace}) => {
+  const $ = window.$;
 
-  const btn = aceOuterDoc.createElement('button');
-  btn.id = 'rz-float-btn';
-  btn.title = 'Open discussion thread for this line';
-  btn.textContent = '\ud83d\udcac'; // 💬
-  aceOuterDoc.body.appendChild(btn);
-
-  let currentLineId = null;
-  let hideTimer = null;
-
-  const show = (y) => {
-    clearTimeout(hideTimer);
-    btn.style.top = y + 'px';
-    btn.style.opacity = '0.6';
-    btn.classList.add('rz-visible');
-  };
-
-  const hide = () => {
-    hideTimer = setTimeout(() => {
-      btn.style.opacity = '0';
-      setTimeout(() => btn.classList.remove('rz-visible'), 160);
-    }, 400);
-  };
-
-  // Track mouse in the ace_inner iframe (inside ace_outer)
-  const aceInnerFrame = aceOuterDoc.querySelector('iframe[name="ace_inner"]');
-  if (aceInnerFrame) {
-    const trackMouse = (e) => {
-      // Convert coordinates: e.clientY is inside ace_inner; adjust for ace_inner's offset in ace_outer
-      const rect = aceInnerFrame.getBoundingClientRect();
-      const y = rect.top + e.clientY;
-
-      // Find which line element the cursor is over
-      const innerDoc = aceInnerFrame.contentDocument;
-      if (!innerDoc) return;
-      const el = innerDoc.elementFromPoint(e.clientX, e.clientY);
-      const line = el && (el.closest('.ace-line') || (el.classList && el.classList.contains('ace-line') ? el : null));
-      if (line) {
-        currentLineId = line.dataset.rzLineId || (line.dataset.rzLineId = generateId());
-        show(y - 2);
-      } else {
-        hide();
-      }
-    };
-
+  // ── Thread button ──────────────────────────────────────────────────────────
+  toolbar.registerCommand('rzThread', () => {
+    // Get current line number from the ace editor to use as thread key
+    let lineKey = 'line-0';
     try {
-      aceInnerFrame.contentDocument.addEventListener('mousemove', trackMouse);
-      aceInnerFrame.contentDocument.addEventListener('mouseleave', hide);
+      ace.callWithAce((innerAce) => {
+        const rep = innerAce.getRep();
+        lineKey = 'line-' + (rep.selStart ? rep.selStart[0] : 0);
+      }, 'rzGetLine');
     } catch (_) {}
-  }
-
-  btn.addEventListener('mouseenter', () => clearTimeout(hideTimer));
-  btn.addEventListener('mouseleave', hide);
-  btn.addEventListener('click', () => {
-    if (currentLineId) openThread(currentLineId);
+    openThread(lineKey);
   });
-}
 
-// ── Task checkboxes via aceCreateDomLine ─────────────────────────────────────
-// This hook fires in the ace_inner context (not the outer frame) so we need
-// to export it from this module; it is invoked by Etherpad's inner hook system.
+  // ── Task button ────────────────────────────────────────────────────────────
+  toolbar.registerCommand('rzTask', () => {
+    ace.callWithAce((innerAce) => {
+      const rep = innerAce.getRep();
+      if (!rep.selStart) return;
+      const lineNum = rep.selStart[0];
+      const lineText = rep.lines.atIndex(lineNum).text;
 
-exports.aceCreateDomLine = (hookName, args) => {
-  // args.domline is the line being rendered; args.cls is the CSS class string
-  const lineText = args.domline && args.domline.lineNode && args.domline.lineNode.textContent;
-  if (!lineText) return [];
+      let newText;
+      if (/^\[x\] /i.test(lineText)) {
+        newText = '[ ] ' + lineText.replace(/^\[[xX]\] /, '');
+      } else if (/^\[ \] /.test(lineText)) {
+        newText = '[x] ' + lineText.replace(/^\[ \] /, '');
+      } else {
+        newText = '[ ] ' + lineText;
+      }
 
-  if (/^\[ \]/.test(lineText) || /^\[[xX]\]/.test(lineText)) {
-    const isDone = /^\[[xX]\]/.test(lineText);
-    // Return a modifier that prepends an interactive checkbox
-    return [{
-      extraOpenTags: '<span class="rz-cb' + (isDone ? ' rz-done' : '') + '" onclick="this.textContent=this.textContent===\'\\u2611\'?\'\\u2610\':\'\\u2611\';this.parentNode.classList.toggle(\'rz-done\')">' +
-        (isDone ? '\u2611' : '\u2610') + '</span>',
-      extraCloseTags: '',
-      cls: args.cls,
-    }];
-  }
-  return [];
+      const lineLen = lineText.length;
+      innerAce.performDocumentReplaceRange(
+        [lineNum, 0], [lineNum, lineLen], newText
+      );
+    }, 'rzTask', true);
+  });
+
+  // ── Inject button HTML into toolbar ───────────────────────────────────────
+  // postToolbarInit fires AFTER the initial [data-key] click bindings,
+  // so we add our own click handlers explicitly.
+  const sep = $('<li class="separator"></li>');
+  const threadBtn = $(
+    '<li title="Open discussion thread for current line">' +
+    '<button class="rz-toolbar-btn" aria-label="Thread">&#x1F4AC;</button></li>'
+  );
+  const taskBtn = $(
+    '<li title="Insert / toggle task on current line">' +
+    '<button class="rz-toolbar-btn" aria-label="Task">&#x2610;</button></li>'
+  );
+
+  $('.menu_left').append(sep).append(threadBtn).append(taskBtn);
+
+  threadBtn.on('click', () => toolbar.triggerCommand('rzThread'));
+  taskBtn.on('click', () => toolbar.triggerCommand('rzTask'));
 };
 
-// ── Entry point ───────────────────────────────────────────────────────────────
+// ── aceCreateDomLine: visual task checkbox in the inner editor ────────────────
+// This hook runs inside the ace_inner frame and lets us prepend a read-only
+// element to each rendered line without touching the contenteditable content.
+
+exports.aceCreateDomLine = (hookName, args) => {
+  const lineNode = args.domline && args.domline.lineNode;
+  if (!lineNode) return [];
+
+  const text = lineNode.textContent || '';
+  const isTask = /^\[ \] /.test(text) || /^\[[xX]\] /.test(text);
+  if (!isTask) return [];
+
+  const done = /^\[[xX]\] /.test(text);
+  return [{
+    extraOpenTags:
+      '<span class="rz-cb">' + (done ? '\u2611' : '\u2610') + '</span>',
+    extraCloseTags: '',
+    cls: args.cls + (done ? ' rz-task-done' : ''),
+  }];
+};
+
+// ── postAceInit: inject CSS into inner frame ──────────────────────────────────
 
 exports.postAceInit = (hookName, {ace}) => {
   injectCSS(document, OUTER_CSS);
 
-  // Wait for ace_outer to be available, then set up the floating button
-  const trySetup = (attempts) => {
-    if (attempts > 40) return;
-    const aceOuter = document.querySelector('iframe[name="ace_outer"]');
-    if (!aceOuter || !aceOuter.contentDocument || !aceOuter.contentDocument.body) {
-      return setTimeout(() => trySetup(attempts + 1), 200);
-    }
-    const aceInner = aceOuter.contentDocument.querySelector('iframe[name="ace_inner"]');
-    if (!aceInner || !aceInner.contentDocument || !aceInner.contentDocument.body) {
-      return setTimeout(() => trySetup(attempts + 1), 200);
-    }
-    injectCSS(aceInner.contentDocument, ACE_INNER_CSS);
-    setupFloatButton(aceOuter.contentDocument);
+  // Inject CSS into ace_inner for task display
+  const tryInner = (n) => {
+    if (n > 30) return;
+    const outer = document.querySelector('iframe[name="ace_outer"]');
+    if (!outer || !outer.contentDocument) return setTimeout(() => tryInner(n + 1), 250);
+    const inner = outer.contentDocument.querySelector('iframe[name="ace_inner"]');
+    if (!inner || !inner.contentDocument || !inner.contentDocument.head) return setTimeout(() => tryInner(n + 1), 250);
+    injectCSS(inner.contentDocument, INNER_CSS);
   };
-  trySetup(0);
+  tryInner(0);
 };
 
-// ── Utilities ─────────────────────────────────────────────────────────────────
+// ── Utility ───────────────────────────────────────────────────────────────────
 
-function generateId() {
-  return 'rz-' + Date.now().toString(36) + '-' + Math.random().toString(36).slice(2, 7);
-}
-
-function esc(str) {
-  return String(str).replace(/[&<>"']/g, (c) =>
+function esc(s) {
+  return String(s).replace(/[&<>"']/g, (c) =>
     ({'&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'}[c]));
 }

@@ -8,6 +8,7 @@
       },
       "client_hooks": {
         "postAceInit": "ep_rizzoma/static/js/rizzoma:postAceInit",
+        "postToolbarInit": "ep_rizzoma/static/js/rizzoma:postToolbarInit",
         "aceCreateDomLine": "ep_rizzoma/static/js/rizzoma:aceCreateDomLine"
       }
     }
