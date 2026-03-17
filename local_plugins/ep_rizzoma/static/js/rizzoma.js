@@ -2,15 +2,18 @@
  * ep_rizzoma - Rizzoma-inspired features for Etherpad
  *
  * Toolbar buttons:
- *   💬  Open discussion thread anchored to the current line
- *   ☐   Insert / toggle a task marker on the current line
+ *   💬  Open a thread sub-pad for the current line in a floating iframe
+ *   ☐   Insert / toggle a [ ] / [x] task marker on the current line
  *
- * Thread panel:  slide-in sidebar in the outer pad frame
- * Task display:  aceCreateDomLine hook adds a read-only checkbox span
+ * Thread model: each thread is a real Etherpad pad named
+ *   thread--<padId>--line<N>
+ * opened in a draggable floating iframe. Multiple threads can be layered.
  *
- * Rules to keep Etherpad sane:
- *   - Never modify ace_inner's contenteditable DOM from outside Etherpad hooks
- *   - CSS is injected dynamically into each frame that needs it
+ * Task display: aceCreateDomLine hook prepends a read-only ☐/☑ span.
+ *
+ * Rules:
+ *   - Never write to ace_inner's contenteditable DOM from outside Etherpad hooks
+ *   - Inside callWithAce callbacks, methods are ace_-prefixed on editorInfo
  */
 
 'use strict';
@@ -25,123 +28,119 @@ function injectCSS(doc, css) {
 }
 
 const OUTER_CSS = `
-/* Rizzoma toolbar buttons */
 .rz-toolbar-btn {
-  font-size: 17px;
-  line-height: 1;
-  cursor: pointer;
-  padding: 0 6px;
-  background: transparent;
-  border: none;
-  vertical-align: middle;
-  opacity: 0.75;
-  transition: opacity .1s;
+  font-size: 17px; line-height: 1; cursor: pointer;
+  padding: 0 6px; background: transparent; border: none;
+  vertical-align: middle; opacity: 0.75; transition: opacity .1s;
 }
 .rz-toolbar-btn:hover { opacity: 1; }
 
-/* Thread panel */
-#rz-thread-panel {
-  position: fixed; right: 0; top: 0; bottom: 0; width: 320px;
-  background: #fff; border-left: 2px solid #4a90d9;
-  box-shadow: -4px 0 16px rgba(0,0,0,.15);
-  display: none; flex-direction: column; z-index: 10000;
-  font-family: sans-serif; font-size: 14px;
+/* Floating thread iframes */
+.rz-thread-win {
+  position: fixed;
+  width: 480px; height: 400px;
+  border: 2px solid #4a90d9; border-radius: 6px;
+  background: #fff; box-shadow: 0 8px 32px rgba(0,0,0,.25);
+  z-index: 10000; display: flex; flex-direction: column;
+  resize: both; overflow: hidden; min-width: 300px; min-height: 200px;
 }
-#rz-thread-panel.rz-visible { display: flex; }
-#rz-thread-header {
+.rz-thread-titlebar {
+  background: #4a90d9; color: #fff; padding: 6px 10px;
   display: flex; align-items: center; justify-content: space-between;
-  padding: 12px 16px; background: #4a90d9; color: #fff;
+  cursor: move; user-select: none; flex-shrink: 0; font-size: 13px;
+  font-family: sans-serif;
 }
-#rz-thread-close {
+.rz-thread-titlebar span { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.rz-thread-close {
   background: transparent; border: none; color: #fff;
-  font-size: 18px; cursor: pointer; padding: 0 4px;
+  font-size: 18px; cursor: pointer; padding: 0 4px; flex-shrink: 0;
 }
-#rz-thread-messages { flex: 1; overflow-y: auto; padding: 12px 16px; }
-.rz-reply { margin-bottom: 12px; padding-bottom: 12px; border-bottom: 1px solid #eee; }
-.rz-reply-author { font-weight: bold; color: #4a90d9; }
-.rz-reply-time { font-size: 11px; color: #888; margin-left: 8px; }
-.rz-reply p { margin: 4px 0 0; }
-#rz-thread-input-area {
-  padding: 12px 16px; border-top: 1px solid #ddd;
-  display: flex; flex-direction: column; gap: 8px;
+.rz-thread-win iframe {
+  flex: 1; width: 100%; border: none;
 }
-#rz-thread-input {
-  width: 100%; box-sizing: border-box; border: 1px solid #ccc;
-  border-radius: 4px; padding: 6px 8px; resize: vertical; font-size: 13px;
-}
-#rz-thread-send {
-  align-self: flex-end; background: #4a90d9; color: #fff;
-  border: none; border-radius: 4px; padding: 6px 16px; cursor: pointer;
-}
-#rz-thread-send:hover { background: #357abd; }
 `;
 
 const INNER_CSS = `
-/* Task checkboxes added by aceCreateDomLine — these are outside the editable span */
-.rz-cb {
-  cursor: default;
-  margin-right: 4px;
-  user-select: none;
-  font-size: 1em;
-}
-.rz-task-line .rz-cb { cursor: pointer; }
+.rz-cb { cursor: pointer; margin-right: 4px; user-select: none; font-size: 1em; }
+.rz-task-done { text-decoration: line-through; color: #999; }
 `;
 
-// ── Thread panel ──────────────────────────────────────────────────────────────
+// ── Thread windows (floating iframe sub-pads) ─────────────────────────────────
 
-let threadPanel = null;
+let threadCount = 0;
 
-function getThreadPanel() {
-  if (threadPanel) return threadPanel;
-  const $ = window.$;
-  threadPanel = document.createElement('div');
-  threadPanel.id = 'rz-thread-panel';
-  threadPanel.innerHTML =
-    '<div id="rz-thread-header"><strong>Discussion thread</strong>' +
-    '<button id="rz-thread-close" title="Close">\xd7</button></div>' +
-    '<div id="rz-thread-messages"></div>' +
-    '<div id="rz-thread-input-area">' +
-    '<textarea id="rz-thread-input" rows="3" placeholder="Reply\u2026"></textarea>' +
-    '<button id="rz-thread-send">Send</button></div>';
-  document.body.appendChild(threadPanel);
-  document.getElementById('rz-thread-close').addEventListener('click', closeThread);
-  document.getElementById('rz-thread-send').addEventListener('click', sendReply);
-  return threadPanel;
+function openThreadPad(padId, lineNum) {
+  const threadPadId = 'thread--' + padId.replace(/[^a-zA-Z0-9_-]/g, '_') + '--line' + lineNum;
+  const threadUrl = '/p/' + encodeURIComponent(threadPadId);
+
+  // Cascade new windows slightly
+  const offset = (threadCount % 8) * 28;
+  threadCount++;
+
+  const win = document.createElement('div');
+  win.className = 'rz-thread-win';
+  win.style.right = (20 + offset) + 'px';
+  win.style.bottom = (20 + offset) + 'px';
+
+  const titlebar = document.createElement('div');
+  titlebar.className = 'rz-thread-titlebar';
+  titlebar.innerHTML =
+    '<span>\ud83d\udcac Thread: line ' + (lineNum + 1) + '</span>' +
+    '<button class="rz-thread-close" title="Close">\xd7</button>';
+
+  const frame = document.createElement('iframe');
+  frame.src = threadUrl;
+  frame.title = 'Thread for line ' + (lineNum + 1);
+
+  win.appendChild(titlebar);
+  win.appendChild(frame);
+  document.body.appendChild(win);
+
+  // Close button
+  titlebar.querySelector('.rz-thread-close').addEventListener('click', () => {
+    win.remove();
+    threadCount = Math.max(0, threadCount - 1);
+  });
+
+  // Drag to move
+  makeDraggable(win, titlebar);
+
+  // Bring to front on click
+  win.addEventListener('mousedown', () => {
+    const maxZ = Math.max(10000, ...Array.from(
+      document.querySelectorAll('.rz-thread-win')
+    ).map((el) => parseInt(el.style.zIndex || '10000', 10)));
+    win.style.zIndex = maxZ + 1;
+  }, true);
 }
 
-function openThread(lineKey) {
-  const panel = getThreadPanel();
-  panel.querySelector('#rz-thread-header strong').textContent =
-    'Thread: line ' + (lineKey || '?');
-  const box = panel.querySelector('#rz-thread-messages');
-  box.innerHTML = '<em>No replies yet. Start the discussion below.</em>';
-  panel.classList.add('rz-visible');
+function makeDraggable(el, handle) {
+  let startX, startY, startRight, startBottom;
 
-  const padId = window.clientVars && window.clientVars.padId;
-  if (!padId) return;
-  fetch('/rizzoma/threads/' + encodeURIComponent(padId))
-    .then((r) => r.json())
-    .then((data) => {
-      const thread = (data.threads || []).find((t) => t.id === lineKey);
-      if (!thread || !thread.replies || !thread.replies.length) return;
-      box.innerHTML = thread.replies.map((r) =>
-        '<div class="rz-reply"><span class="rz-reply-author">' + esc(r.author) +
-        '</span><span class="rz-reply-time">' + new Date(r.time).toLocaleString() +
-        '</span><p>' + esc(r.text) + '</p></div>'
-      ).join('');
-    })
-    .catch(() => {});
-}
+  const onMouseMove = (e) => {
+    const dx = e.clientX - startX;
+    const dy = e.clientY - startY;
+    el.style.right = Math.max(0, startRight - dx) + 'px';
+    el.style.bottom = Math.max(0, startBottom - dy) + 'px';
+    el.style.left = 'auto';
+    el.style.top = 'auto';
+  };
 
-function closeThread() {
-  if (threadPanel) threadPanel.classList.remove('rz-visible');
-}
+  const onMouseUp = () => {
+    document.removeEventListener('mousemove', onMouseMove);
+    document.removeEventListener('mouseup', onMouseUp);
+  };
 
-function sendReply() {
-  const input = document.getElementById('rz-thread-input');
-  if (!input || !input.value.trim()) return;
-  // TODO: persist via REST
-  input.value = '';
+  handle.addEventListener('mousedown', (e) => {
+    if (e.target.classList.contains('rz-thread-close')) return;
+    startX = e.clientX;
+    startY = e.clientY;
+    startRight = parseInt(el.style.right || '20', 10);
+    startBottom = parseInt(el.style.bottom || '20', 10);
+    document.addEventListener('mousemove', onMouseMove);
+    document.addEventListener('mouseup', onMouseUp);
+    e.preventDefault();
+  });
 }
 
 // ── Toolbar buttons ───────────────────────────────────────────────────────────
@@ -151,27 +150,25 @@ exports.postToolbarInit = (hookName, {toolbar, ace}) => {
 
   // ── Thread button ──────────────────────────────────────────────────────────
   toolbar.registerCommand('rzThread', () => {
-    // Get current line number from the ace editor to use as thread key
-    let lineKey = 'line-0';
-    try {
-      ace.callWithAce((innerAce) => {
-        const rep = innerAce.getRep();
-        lineKey = 'line-' + (rep.selStart ? rep.selStart[0] : 0);
-      }, 'rzGetLine');
-    } catch (_) {}
-    openThread(lineKey);
+    const padId = (window.clientVars && window.clientVars.padId) || 'pad';
+    let lineNum = 0;
+    ace.callWithAce((editorInfo) => {
+      const rep = editorInfo.ace_getRep();
+      if (rep && rep.selStart) lineNum = rep.selStart[0];
+    }, 'rzGetLine');
+    openThreadPad(padId, lineNum);
   });
 
   // ── Task button ────────────────────────────────────────────────────────────
   toolbar.registerCommand('rzTask', () => {
-    ace.callWithAce((innerAce) => {
-      const rep = innerAce.getRep();
-      if (!rep.selStart) return;
+    ace.callWithAce((editorInfo) => {
+      const rep = editorInfo.ace_getRep();
+      if (!rep || !rep.selStart) return;
       const lineNum = rep.selStart[0];
       const lineText = rep.lines.atIndex(lineNum).text;
 
       let newText;
-      if (/^\[x\] /i.test(lineText)) {
+      if (/^\[[xX]\] /.test(lineText)) {
         newText = '[ ] ' + lineText.replace(/^\[[xX]\] /, '');
       } else if (/^\[ \] /.test(lineText)) {
         newText = '[x] ' + lineText.replace(/^\[ \] /, '');
@@ -179,59 +176,47 @@ exports.postToolbarInit = (hookName, {toolbar, ace}) => {
         newText = '[ ] ' + lineText;
       }
 
-      const lineLen = lineText.length;
-      innerAce.performDocumentReplaceRange(
-        [lineNum, 0], [lineNum, lineLen], newText
+      editorInfo.ace_performDocumentReplaceRange(
+        [lineNum, 0], [lineNum, lineText.length], newText
       );
     }, 'rzTask', true);
   });
 
-  // ── Inject button HTML into toolbar ───────────────────────────────────────
-  // postToolbarInit fires AFTER the initial [data-key] click bindings,
-  // so we add our own click handlers explicitly.
-  const sep = $('<li class="separator"></li>');
+  // ── Inject buttons into toolbar ───────────────────────────────────────────
   const threadBtn = $(
-    '<li title="Open discussion thread for current line">' +
+    '<li title="Open thread sub-pad for current line">' +
     '<button class="rz-toolbar-btn" aria-label="Thread">&#x1F4AC;</button></li>'
   );
   const taskBtn = $(
-    '<li title="Insert / toggle task on current line">' +
+    '<li title="Insert/toggle task marker on current line">' +
     '<button class="rz-toolbar-btn" aria-label="Task">&#x2610;</button></li>'
   );
 
-  $('.menu_left').append(sep).append(threadBtn).append(taskBtn);
+  $('.menu_left').append('<li class="separator"></li>').append(threadBtn).append(taskBtn);
 
   threadBtn.on('click', () => toolbar.triggerCommand('rzThread'));
   taskBtn.on('click', () => toolbar.triggerCommand('rzTask'));
 };
 
-// ── aceCreateDomLine: visual task checkbox in the inner editor ────────────────
-// This hook runs inside the ace_inner frame and lets us prepend a read-only
-// element to each rendered line without touching the contenteditable content.
+// ── aceCreateDomLine: render task checkboxes ──────────────────────────────────
 
 exports.aceCreateDomLine = (hookName, args) => {
   const lineNode = args.domline && args.domline.lineNode;
   if (!lineNode) return [];
-
   const text = lineNode.textContent || '';
-  const isTask = /^\[ \] /.test(text) || /^\[[xX]\] /.test(text);
-  if (!isTask) return [];
-
+  if (!/^\[[ xX]\] /.test(text)) return [];
   const done = /^\[[xX]\] /.test(text);
   return [{
-    extraOpenTags:
-      '<span class="rz-cb">' + (done ? '\u2611' : '\u2610') + '</span>',
+    extraOpenTags: '<span class="rz-cb">' + (done ? '\u2611' : '\u2610') + '</span>',
     extraCloseTags: '',
     cls: args.cls + (done ? ' rz-task-done' : ''),
   }];
 };
 
-// ── postAceInit: inject CSS into inner frame ──────────────────────────────────
+// ── postAceInit: inject CSS ───────────────────────────────────────────────────
 
 exports.postAceInit = (hookName, {ace}) => {
   injectCSS(document, OUTER_CSS);
-
-  // Inject CSS into ace_inner for task display
   const tryInner = (n) => {
     if (n > 30) return;
     const outer = document.querySelector('iframe[name="ace_outer"]');
@@ -242,10 +227,3 @@ exports.postAceInit = (hookName, {ace}) => {
   };
   tryInner(0);
 };
-
-// ── Utility ───────────────────────────────────────────────────────────────────
-
-function esc(s) {
-  return String(s).replace(/[&<>"']/g, (c) =>
-    ({'&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'}[c]));
-}
