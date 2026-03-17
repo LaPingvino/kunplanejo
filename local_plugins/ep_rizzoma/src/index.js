@@ -11,6 +11,19 @@ exports.aceAttribsToClasses = (hookName, args) => {
 exports.expressCreateServer = (hookName, {app, padManager}) => {
   // List which line numbers already have a thread sub-pad for a given pad.
   // Thread pads are named  thread--<sanitisedPadId>--line<N>
+  app.delete('/rizzoma/thread/:threadPadId', async (req, res) => {
+    try {
+      const padId = req.params.threadPadId;
+      if (!padId.startsWith('thread--')) {
+        return res.status(400).json({error: 'Not a thread pad'});
+      }
+      await padManager.removePad(padId);
+      res.json({ok: true});
+    } catch (e) {
+      res.status(500).json({error: String(e.message || e)});
+    }
+  });
+
   app.get('/rizzoma/thread-lines/:padId', async (req, res) => {
     try {
       const padId = req.params.padId;

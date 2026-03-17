@@ -90,6 +90,7 @@ span.line-number[data-rz-thread]:hover { background: rgba(74,144,217,.15); borde
   opacity: 0.8; transition: opacity .1s;
 }
 .rz-hover-btn:hover { opacity: 1; display: block; }
+.rz-hover-del-btn { background: #c0392b; margin-left: 3px; }
 `;
 
 // ── Module-level state ────────────────────────────────────────────────────────
@@ -114,6 +115,16 @@ function threadUrl(padId, lineNum) {
     rzLine: String(lineNum),
   });
   return '/p/' + encodeURIComponent(tPadId) + '?' + params.toString();
+}
+
+async function deleteThread(padId, lineNum) {
+  if (!confirm('Delete this thread and all its content? This cannot be undone.')) return false;
+  const tPadId = threadPadId(padId, lineNum);
+  const r = await fetch('/rizzoma/thread/' + encodeURIComponent(tPadId), {method: 'DELETE'});
+  if (!r.ok) throw new Error((await r.json()).error || r.statusText);
+  threadLineSet.delete(lineNum);
+  scheduleUpdateLineNumbers();
+  return true;
 }
 
 function openThreadPad(padId, lineNum) {
@@ -185,8 +196,24 @@ function openThreadPad(padId, lineNum) {
     threadCount = Math.max(0, threadCount - 1);
   });
 
+  const deleteBtn = document.createElement('button');
+  deleteBtn.title = 'Delete thread';
+  deleteBtn.textContent = '\ud83d\uddd1'; // 🗑
+  deleteBtn.addEventListener('click', async (e) => {
+    e.stopPropagation();
+    try {
+      if (await deleteThread(padId, lineNum)) {
+        win.remove();
+        threadCount = Math.max(0, threadCount - 1);
+      }
+    } catch (err) {
+      alert('Failed to delete thread: ' + err.message);
+    }
+  });
+
   btns.appendChild(maximizeBtn);
   btns.appendChild(newWinBtn);
+  btns.appendChild(deleteBtn);
   btns.appendChild(closeBtn);
   titlebar.appendChild(label);
   titlebar.appendChild(btns);
@@ -262,32 +289,59 @@ function setupHoverButton(aceOuterDoc) {
   btn.title = 'Open/create thread for this line';
   aceOuterDoc.body.appendChild(btn);
 
+  const delBtn = aceOuterDoc.createElement('button');
+  delBtn.className = 'rz-hover-btn rz-hover-del-btn';
+  delBtn.textContent = '\ud83d\uddd1'; // 🗑
+  delBtn.title = 'Delete thread for this line';
+  aceOuterDoc.body.appendChild(delBtn);
+
   let hoverIdx = -1;
   let hideTimer = null;
 
-  const showBtn = (div) => {
+  const showBtns = (div) => {
     clearTimeout(hideTimer);
     const divs = [...sidedivInner.querySelectorAll(':scope > div')];
     hoverIdx = divs.indexOf(div);
     const rect = div.getBoundingClientRect();
-    btn.style.top = (rect.top + rect.height / 2 - 9) + 'px';
+    const top = (rect.top + rect.height / 2 - 9) + 'px';
+    btn.style.top = top;
     btn.style.left = (rect.right + 2) + 'px';
     btn.style.display = 'block';
+    const hasThread = threadLineSet.has(hoverIdx);
+    delBtn.style.top = top;
+    delBtn.style.left = (rect.right + btn.offsetWidth + 5) + 'px';
+    delBtn.style.display = hasThread ? 'block' : 'none';
   };
 
-  const hideBtn = () => {
-    hideTimer = setTimeout(() => { btn.style.display = 'none'; }, 250);
+  const hideBtns = () => {
+    hideTimer = setTimeout(() => {
+      btn.style.display = 'none';
+      delBtn.style.display = 'none';
+    }, 250);
   };
 
   sidedivInner.addEventListener('mouseover', (e) => {
     const div = e.target.closest('#sidedivinner > div');
-    if (div) showBtn(div);
+    if (div) showBtns(div);
   });
-  sidedivInner.addEventListener('mouseleave', hideBtn);
-  btn.addEventListener('mouseenter', () => clearTimeout(hideTimer));
-  btn.addEventListener('mouseleave', hideBtn);
+  sidedivInner.addEventListener('mouseleave', hideBtns);
+  [btn, delBtn].forEach((b) => {
+    b.addEventListener('mouseenter', () => clearTimeout(hideTimer));
+    b.addEventListener('mouseleave', hideBtns);
+  });
+
   btn.addEventListener('click', () => {
     if (hoverIdx >= 0) openThreadPad(currentPadId, hoverIdx);
+  });
+
+  delBtn.addEventListener('click', async () => {
+    if (hoverIdx < 0) return;
+    try {
+      await deleteThread(currentPadId, hoverIdx);
+      delBtn.style.display = 'none';
+    } catch (err) {
+      alert('Failed to delete thread: ' + err.message);
+    }
   });
 }
 
