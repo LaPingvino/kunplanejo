@@ -265,14 +265,25 @@ const convertTypescriptWatched = (content: string, cb: (output:string, hash: str
 exports.expressCreateServer = async (_hookName: string, args: ArgsExpressType, cb: Function) => {
   const padString =   eejs.require('ep_etherpad-lite/templates/padBootstrap.js', {
     pluginModules: (() => {
-      const pluginModules = new Set();
+      // Build a Map of module-identifier → absolute-path so the template can
+      // require() plugins regardless of whether they live in src/plugin_packages
+      // or local_plugins (or anywhere else set by package.path).
+      const pluginModules = new Map<string, string>();
       for (const part of plugins.parts) {
         for (const [, hookFnName] of Object.entries(part.client_hooks || {})) {
           // @ts-ignore
-          pluginModules.add(hookFnName.split(':')[0]);
+          const module: string = hookFnName.split(':')[0];
+          if (!pluginModules.has(module)) {
+            const pkgPath: string | undefined =
+              plugins.plugins[part.plugin]?.package?.path;
+            if (pkgPath) {
+              const relPath = module.substring(part.plugin.length + 1);
+              pluginModules.set(module, path.join(pkgPath, relPath));
+            }
+          }
         }
       }
-      return [...pluginModules];
+      return pluginModules;
     })(),
     settings,
   })
