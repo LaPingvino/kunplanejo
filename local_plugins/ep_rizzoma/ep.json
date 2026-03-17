@@ -7,7 +7,8 @@
         "aceAttribsToClasses": "ep_rizzoma/src/index:aceAttribsToClasses"
       },
       "client_hooks": {
-        "postAceInit": "ep_rizzoma/static/js/rizzoma:postAceInit"
+        "postAceInit": "ep_rizzoma/static/js/rizzoma:postAceInit",
+        "aceCreateDomLine": "ep_rizzoma/static/js/rizzoma:aceCreateDomLine"
       }
     }
   ]
