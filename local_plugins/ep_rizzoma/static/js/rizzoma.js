@@ -114,6 +114,12 @@ function threadUrl(padId, lineNum) {
     rzParent: padId,
     rzLine: String(lineNum),
   });
+  // Forward Matrix widget context params so thread pads inherit identity
+  const src = new URLSearchParams(window.location.search);
+  for (const key of ['widgetId', 'widget_id', 'userName', 'userId', 'parentUrl', 'userColor']) {
+    const v = src.get(key);
+    if (v) params.set(key, v);
+  }
   return '/p/' + encodeURIComponent(tPadId) + '?' + params.toString();
 }
 
