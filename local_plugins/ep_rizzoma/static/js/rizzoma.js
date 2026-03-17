@@ -7,10 +7,11 @@
  *
  * Thread pads: named  thread--<padId>--line<N>
  *   - Open as draggable/resizable floating iframe
+ *   - Maximize button (⤢/⤡) to fill the viewport
  *   - Also openable in a new browser window
  *   - Thread pads receive ?rzParent=<padId>&rzLine=<N> and show a back-link
  *
- * Indicators: small 💬 badge overlaid in ace_outer next to any line
+ * Indicators: small 💬 badge overlaid in the outer page next to any line
  *   that already has a thread pad, refreshed on scroll/resize.
  */
 
@@ -56,9 +57,23 @@ const OUTER_CSS = `
 .rz-thread-titlebar-btns button:hover { background: rgba(255,255,255,.2); }
 .rz-thread-win iframe { flex: 1; width: 100%; border: none; }
 
+/* Thread line indicators — fixed in outer page, computed positions */
+#rz-indicators {
+  position: fixed; top: 0; left: 0; width: 100%; height: 100%;
+  pointer-events: none; z-index: 5000;
+}
+.rz-line-indicator {
+  position: absolute;
+  font-size: 11px; line-height: 1; opacity: 0.6;
+  pointer-events: auto; cursor: pointer;
+  background: rgba(74,144,217,.15); border-radius: 3px; padding: 1px 3px;
+  transition: opacity .15s;
+}
+.rz-line-indicator:hover { opacity: 1; }
+
 /* Parent back-link banner (shown in thread pads) */
 #rz-parent-banner {
-  position: fixed; top: 0; left: 0; right: 0; z-index: 9999;
+  position: fixed; top: 0; left: 0; right: 0; z-index: 2147483647;
   background: #4a90d9; color: #fff; padding: 6px 14px;
   font-family: sans-serif; font-size: 13px;
   display: flex; align-items: center; gap: 10px;
@@ -70,18 +85,6 @@ const OUTER_CSS = `
 }
 `;
 
-const ACE_OUTER_CSS = `
-/* Thread existence indicators — overlaid in ace_outer, not in the editor */
-.rz-line-indicator {
-  position: absolute; right: 2px;
-  font-size: 11px; line-height: 1; opacity: 0.55;
-  pointer-events: auto; cursor: pointer; z-index: 50;
-  background: rgba(74,144,217,.12); border-radius: 3px; padding: 1px 3px;
-  transition: opacity .15s;
-}
-.rz-line-indicator:hover { opacity: 1; }
-`;
-
 const INNER_CSS = `
 .rz-cb { cursor: pointer; margin-right: 4px; user-select: none; }
 .rz-task-done { text-decoration: line-through; color: #999; }
@@ -91,8 +94,9 @@ const INNER_CSS = `
 
 let threadLineSet = new Set();   // line numbers that have existing thread pads
 let currentPadId = '';
-let indicatorContainer = null;   // div in ace_outer holding the badges
-let aceInnerFrameRef = null;     // cached reference
+let indicatorContainer = null;   // fixed div in outer page holding the badges
+let aceInnerFrameRef = null;     // <iframe name="ace_inner"> in ace_outer
+let aceOuterElemRef = null;      // <iframe name="ace_outer"> in outer page
 
 // ── Thread windows ────────────────────────────────────────────────────────────
 
@@ -130,6 +134,40 @@ function openThreadPad(padId, lineNum) {
   const btns = document.createElement('div');
   btns.className = 'rz-thread-titlebar-btns';
 
+  // Maximize / restore button
+  const maximizeBtn = document.createElement('button');
+  maximizeBtn.title = 'Maximize';
+  maximizeBtn.textContent = '\u2b1c'; // ⬜
+  let isMaximized = false;
+  maximizeBtn.addEventListener('click', (e) => {
+    e.stopPropagation();
+    isMaximized = !isMaximized;
+    if (isMaximized) {
+      win.dataset.rzRight = win.style.right;
+      win.dataset.rzBottom = win.style.bottom;
+      win.dataset.rzWidth = win.style.width || '480px';
+      win.dataset.rzHeight = win.style.height || '400px';
+      Object.assign(win.style, {
+        right: '0', bottom: '0', top: '0', left: '0',
+        width: '100vw', height: '100vh',
+        resize: 'none', borderRadius: '0',
+      });
+      maximizeBtn.textContent = '\u2b1b'; // ⬛ (restore)
+      maximizeBtn.title = 'Restore';
+    } else {
+      Object.assign(win.style, {
+        right: win.dataset.rzRight || (20 + offset) + 'px',
+        bottom: win.dataset.rzBottom || (20 + offset) + 'px',
+        width: win.dataset.rzWidth || '480px',
+        height: win.dataset.rzHeight || '400px',
+        top: 'auto', left: 'auto',
+        resize: 'both', borderRadius: '6px',
+      });
+      maximizeBtn.textContent = '\u2b1c'; // ⬜
+      maximizeBtn.title = 'Maximize';
+    }
+  });
+
   const newWinBtn = document.createElement('button');
   newWinBtn.title = 'Open in new window';
   newWinBtn.textContent = '\u2197'; // ↗
@@ -147,6 +185,7 @@ function openThreadPad(padId, lineNum) {
     threadCount = Math.max(0, threadCount - 1);
   });
 
+  btns.appendChild(maximizeBtn);
   btns.appendChild(newWinBtn);
   btns.appendChild(closeBtn);
   titlebar.appendChild(label);
@@ -188,6 +227,7 @@ function makeDraggable(el, handle) {
   };
   handle.addEventListener('mousedown', (e) => {
     if (e.target.tagName === 'BUTTON') return;
+    if (isMaximized(el)) return;
     startX = e.clientX; startY = e.clientY;
     startRight = parseInt(el.style.right || '20', 10);
     startBottom = parseInt(el.style.bottom || '20', 10);
@@ -197,17 +237,21 @@ function makeDraggable(el, handle) {
   });
 }
 
-// ── Thread line indicators in ace_outer ───────────────────────────────────────
+function isMaximized(win) {
+  return win.style.width === '100vw';
+}
 
-function setupIndicators(aceOuterDoc, aceInnerFrame) {
+// ── Thread line indicators (fixed in outer page) ───────────────────────────────
+
+function setupIndicators(aceInnerFrame) {
   aceInnerFrameRef = aceInnerFrame;
-  injectCSS(aceOuterDoc, ACE_OUTER_CSS);
+  // aceOuterElemRef already set before this call
 
-  indicatorContainer = aceOuterDoc.createElement('div');
+  if (indicatorContainer) indicatorContainer.remove();
+  indicatorContainer = document.createElement('div');
   indicatorContainer.id = 'rz-indicators';
-  aceOuterDoc.body.appendChild(indicatorContainer);
+  document.body.appendChild(indicatorContainer);
 
-  // Update on inner scroll and window resize
   try {
     aceInnerFrame.contentDocument.addEventListener('scroll', updateIndicators, {passive: true});
   } catch (_) {}
@@ -217,26 +261,37 @@ function setupIndicators(aceOuterDoc, aceInnerFrame) {
 }
 
 function updateIndicators() {
-  if (!indicatorContainer || !aceInnerFrameRef) return;
+  if (!indicatorContainer || !aceInnerFrameRef || !aceOuterElemRef) return;
 
-  // Clear old badges
   indicatorContainer.innerHTML = '';
   if (threadLineSet.size === 0) return;
 
   const innerDoc = aceInnerFrameRef.contentDocument;
   if (!innerDoc || !innerDoc.body) return;
 
-  const frameRect = aceInnerFrameRef.getBoundingClientRect();
-  const lines = innerDoc.querySelectorAll('.ace-line');
+  // aceOuterRect: position of ace_outer iframe in the outer page viewport
+  const aceOuterRect = aceOuterElemRef.getBoundingClientRect();
+  // aceInnerRect: position of ace_inner iframe within ace_outer's viewport
+  const aceInnerRect = aceInnerFrameRef.getBoundingClientRect();
 
+  const lines = innerDoc.querySelectorAll('.ace-line');
   lines.forEach((line, idx) => {
     if (!threadLineSet.has(idx)) return;
+    // lineRect: position of line in ace_inner's viewport
     const lineRect = line.getBoundingClientRect();
-    const badge = indicatorContainer.ownerDocument.createElement('div');
+
+    // Combined position in outer page viewport (for position:fixed inside #rz-indicators)
+    const top = aceOuterRect.top + aceInnerRect.top + lineRect.top + lineRect.height / 2 - 8;
+
+    // Only render if vertically within the editor area
+    if (top < aceOuterRect.top || top > aceOuterRect.bottom) return;
+
+    const badge = document.createElement('div');
     badge.className = 'rz-line-indicator';
     badge.title = 'Thread exists \u2014 click to open';
     badge.textContent = '\ud83d\udcac'; // 💬
-    badge.style.top = (frameRect.top + lineRect.top + lineRect.height / 2 - 8) + 'px';
+    badge.style.top = top + 'px';
+    badge.style.right = Math.max(2, window.innerWidth - aceOuterRect.right + 4) + 'px';
     badge.addEventListener('click', () => openThreadPad(currentPadId, idx));
     indicatorContainer.appendChild(badge);
   });
@@ -265,10 +320,16 @@ function maybeShowParentBanner() {
   banner.id = 'rz-parent-banner';
   const lineLabel = line !== null ? ' (line ' + (parseInt(line, 10) + 1) + ')' : '';
   banner.innerHTML =
-    '\ud83d\udcac Thread for pad: <a href="/p/' + encodeURIComponent(parentPad) +
+    '\ud83d\udcac Thread for: <a href="/p/' + encodeURIComponent(parentPad) +
     '" target="_blank">' + esc(parentPad) + lineLabel + '</a>' +
     '<button id="rz-parent-banner-close" title="Dismiss">\xd7</button>';
-  document.body.prepend(banner);
+
+  // body is guaranteed to exist at postAceInit time, but prepend anyway
+  if (document.body) {
+    document.body.prepend(banner);
+  } else {
+    document.addEventListener('DOMContentLoaded', () => document.body.prepend(banner));
+  }
   document.getElementById('rz-parent-banner-close').addEventListener('click', () => banner.remove());
 }
 
@@ -326,7 +387,6 @@ exports.postAceInit = (hookName, {ace}) => {
   currentPadId = (window.clientVars && window.clientVars.padId) || '';
   if (currentPadId) loadThreadLines(currentPadId);
 
-  // Set up ace_outer overlay and inject inner CSS
   const trySetup = (n) => {
     if (n > 30) return;
     const outer = document.querySelector('iframe[name="ace_outer"]');
@@ -334,7 +394,8 @@ exports.postAceInit = (hookName, {ace}) => {
     const inner = outer.contentDocument.querySelector('iframe[name="ace_inner"]');
     if (!inner || !inner.contentDocument || !inner.contentDocument.head) return setTimeout(() => trySetup(n + 1), 250);
     injectCSS(inner.contentDocument, INNER_CSS);
-    setupIndicators(outer.contentDocument, inner);
+    aceOuterElemRef = outer;   // store outer iframe reference for coord calculation
+    setupIndicators(inner);
   };
   trySetup(0);
 };
