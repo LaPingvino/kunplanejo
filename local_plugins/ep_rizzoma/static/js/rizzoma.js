@@ -71,10 +71,14 @@ const OUTER_CSS = `
 }
 `;
 
+// Injected into ace_inner (contenteditable area)
 const INNER_CSS = `
 .rz-cb { cursor: pointer; margin-right: 4px; user-select: none; }
 .rz-task-done { text-decoration: line-through; color: #999; }
-/* Thread line numbers get highlighted in the existing line-number span */
+`;
+
+// Injected into ace_outer (where #sidedivinner and span.line-number live)
+const ACE_OUTER_CSS = `
 span.line-number[data-rz-thread] {
   color: #4a90d9 !important; font-weight: bold; cursor: pointer;
 }
@@ -245,11 +249,12 @@ function scheduleUpdateLineNumbers() {
 
 function updateLineNumbers() {
   if (!aceInnerFrameRef) return;
-  const innerDoc = aceInnerFrameRef.contentDocument;
-  if (!innerDoc) return;
+  // span.line-number lives in #sidedivinner inside ace_outer, not in ace_inner
+  const aceOuterDoc = aceInnerFrameRef.ownerDocument;
+  if (!aceOuterDoc) return;
 
   // Clear previous thread annotations
-  innerDoc.querySelectorAll('span.line-number[data-rz-thread]').forEach((span) => {
+  aceOuterDoc.querySelectorAll('span.line-number[data-rz-thread]').forEach((span) => {
     span.textContent = span.dataset.rzOrig;
     delete span.dataset.rzThread;
     delete span.dataset.rzOrig;
@@ -258,9 +263,12 @@ function updateLineNumbers() {
 
   if (threadLineSet.size === 0) return;
 
-  innerDoc.querySelectorAll('.ace-line').forEach((line, idx) => {
+  const sidedivInner = aceOuterDoc.getElementById('sidedivinner');
+  if (!sidedivInner) return;
+
+  sidedivInner.querySelectorAll(':scope > div').forEach((div, idx) => {
     if (!threadLineSet.has(idx)) return;
-    const numSpan = line.querySelector('span.line-number');
+    const numSpan = div.querySelector('span.line-number');
     if (!numSpan) return;
     numSpan.dataset.rzOrig = numSpan.textContent;
     numSpan.dataset.rzThread = '1';
@@ -378,6 +386,7 @@ exports.postAceInit = (hookName, {ace}) => {
     const inner = outer.contentDocument.querySelector('iframe[name="ace_inner"]');
     if (!inner || !inner.contentDocument || !inner.contentDocument.head) return setTimeout(() => trySetup(n + 1), 250);
     injectCSS(inner.contentDocument, INNER_CSS);
+    injectCSS(outer.contentDocument, ACE_OUTER_CSS);
     setupLineNumbers(inner);
   };
   trySetup(0);
