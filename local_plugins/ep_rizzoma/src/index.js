@@ -8,7 +8,7 @@ exports.aceAttribsToClasses = (hookName, args) => {
   return [];
 };
 
-const padManager = require('ep_etherpad-lite/src/node/db/PadManager');
+const padManager = require('ep_etherpad-lite/node/db/PadManager');
 
 exports.expressCreateServer = (hookName, {app}) => {
   // List which line numbers already have a thread sub-pad for a given pad.
