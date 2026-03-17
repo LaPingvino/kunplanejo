@@ -231,4 +231,7 @@
   } else {
     init();
   }
+
+  // Etherpad client hook entry point
+  exports.postAceInit = () => init();
 })();

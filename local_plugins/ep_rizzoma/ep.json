@@ -1,0 +1,14 @@
+{
+  "parts": [
+    {
+      "name": "main",
+      "hooks": {
+        "expressCreateServer": "ep_rizzoma/src/index:expressCreateServer",
+        "aceAttribsToClasses": "ep_rizzoma/src/index:aceAttribsToClasses"
+      },
+      "client_hooks": {
+        "postAceInit": "ep_rizzoma/static/js/rizzoma:postAceInit"
+      }
+    }
+  ]
+}

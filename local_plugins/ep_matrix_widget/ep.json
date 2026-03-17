@@ -1,0 +1,13 @@
+{
+  "parts": [
+    {
+      "name": "main",
+      "hooks": {
+        "expressCreateServer": "ep_matrix_widget/src/index:expressCreateServer"
+      },
+      "client_hooks": {
+        "postAceInit": "ep_matrix_widget/static/js/matrix_widget:postAceInit"
+      }
+    }
+  ]
+}

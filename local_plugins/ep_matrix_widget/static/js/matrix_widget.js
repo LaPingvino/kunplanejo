@@ -145,4 +145,9 @@
       setTimeout(() => waitForEtherpad(cb, attempts + 1), 100);
     }
   }
+
+  // Etherpad client hook entry point — called after the ACE editor is ready
+  exports.postAceInit = () => {
+    if (isMatrixWidget) applyFromUrlParams();
+  };
 })();

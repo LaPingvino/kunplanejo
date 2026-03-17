@@ -143,6 +143,27 @@ exports.getPackages = async () => {
     realPath: path.join(settings.root, 'src'),
   };
 
+  // Load plugins directly from local_plugins/ without going through live-plugin-manager.
+  // This avoids runtime writes to the (read-only in production) app directory.
+  const localPluginsDir = path.join(settings.root, 'local_plugins');
+  try {
+    const entries = await fs.readdir(localPluginsDir);
+    for (const entry of entries) {
+      const pluginDir = path.join(localPluginsDir, entry);
+      try {
+        const pkg = JSON.parse(await fs.readFile(path.join(pluginDir, 'package.json'), 'utf8'));
+        if (pkg.name && pkg.name.startsWith(exports.prefix) && !newDependencies[pkg.name]) {
+          newDependencies[pkg.name] = {
+            name: pkg.name,
+            version: pkg.version || '0.0.0',
+            path: pluginDir,
+            realPath: pluginDir,
+          };
+        }
+      } catch { /* not a plugin package, skip */ }
+    }
+  } catch { /* local_plugins dir absent, skip */ }
+
   return newDependencies;
 };
 
