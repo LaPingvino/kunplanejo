@@ -26,18 +26,26 @@ function isMatrixWidget() {
 function applyMatrixIdentity(userId, displayName) {
   waitForEtherpad(() => {
     try {
-      if (window.pad && window.pad.myUserInfo) {
-        window.pad.myUserInfo.name = displayName;
-        if (window.pad.socket) {
-          window.pad.socket.json.send({
-            type: 'userChanges',
-            userInfo: window.pad.myUserInfo,
-          });
-        }
-      }
-      if (userId) {
-        localStorage.setItem('ep_matrix_userId', userId);
-        localStorage.setItem('ep_matrix_displayName', displayName);
+      const pad = window.pad;
+      if (!pad || !pad.myUserInfo) return;
+      pad.myUserInfo.name = displayName;
+      // Use notifyChangeName if available (triggers the full name-change flow)
+      if (typeof pad.notifyChangeName === 'function') {
+        pad.notifyChangeName(displayName);
+      } else if (pad.socket) {
+        // Fall back to the raw USERINFO_UPDATE message Etherpad expects
+        pad.socket.emit('message', {
+          component: 'pad',
+          type: 'COLLABROOM',
+          data: {
+            type: 'USERINFO_UPDATE',
+            userInfo: {
+              userId: pad.myUserInfo.userId,
+              name: displayName,
+              colorId: pad.myUserInfo.colorId,
+            },
+          },
+        });
       }
       console.info(`[ep_matrix_widget] Identity applied: ${displayName} (${userId})`);
     } catch (e) {
@@ -49,6 +57,7 @@ function applyMatrixIdentity(userId, displayName) {
 function applyFromUrlParams() {
   const userId = getParam('userId') || getParam('matrix_user_id') || '';
   const displayName =
+    getParam('userName') ||      // Etherpad's own param — most reliable
     getParam('displayName') ||
     getParam('displayname') ||
     (userId ? userId.split(':')[0].replace('@', '') : 'Matrix User');
@@ -132,12 +141,13 @@ function showWidgetUrlBanner() {
   if (!padId) return;
 
   const host = window.location.origin;
-  // Matrix Widget API v2 URL template — paste this into Element's "Add widget" dialog
+  // Matrix Widget API v2 URL template — paste this into Element's "Add widget" dialog.
+  // userName is the Etherpad param read at CLIENT_READY time (most reliable).
   const url =
     host + '/p/' + encodeURIComponent(padId) +
     '?widgetId=$matrix_widget_id' +
+    '&userName=$matrix_display_name' +
     '&userId=$matrix_user_id' +
-    '&displayName=$matrix_display_name' +
     '&parentUrl=$org.matrix.msc2762.as_widget_url';
 
   const bar = document.createElement('div');
