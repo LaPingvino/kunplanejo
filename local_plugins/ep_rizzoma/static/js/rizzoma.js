@@ -11,8 +11,8 @@
  *   - Also openable in a new browser window
  *   - Thread pads receive ?rzParent=<padId>&rzLine=<N> and show a back-link
  *
- * Left gutter: overlaid in the outer page, shows line numbers.
- *   Lines with a thread show "N 💬" and are clickable.
+ * Thread indicator: augments existing span.line-number in ace_inner —
+ *   thread lines show "N 💬" in blue and are clickable.
  */
 
 'use strict';
@@ -57,26 +57,6 @@ const OUTER_CSS = `
 .rz-thread-titlebar-btns button:hover { background: rgba(255,255,255,.2); }
 .rz-thread-win iframe { flex: 1; width: 100%; border: none; }
 
-/* Line number gutter — fixed overlay in the outer page */
-#rz-gutter {
-  position: fixed; top: 0; left: 0; width: 100%; height: 100%;
-  pointer-events: none; z-index: 5000;
-}
-.rz-line-num {
-  position: absolute;
-  width: 44px; text-align: right; padding-right: 4px;
-  font: 11px/1 monospace; color: #bbb;
-  display: flex; align-items: center; justify-content: flex-end;
-  gap: 2px; box-sizing: border-box;
-  pointer-events: none;
-}
-.rz-line-num-thread {
-  color: #4a90d9; font-weight: bold;
-  pointer-events: auto; cursor: pointer;
-  background: rgba(74,144,217,.08); border-radius: 3px;
-}
-.rz-line-num-thread:hover { background: rgba(74,144,217,.2); }
-
 /* Parent back-link banner (shown in thread pads) */
 #rz-parent-banner {
   position: fixed; top: 0; left: 0; right: 0; z-index: 2147483647;
@@ -91,21 +71,22 @@ const OUTER_CSS = `
 }
 `;
 
-// Left margin for the inner editor body so gutter doesn't overlap text
 const INNER_CSS = `
-#innerdocbody { margin-left: 48px !important; }
 .rz-cb { cursor: pointer; margin-right: 4px; user-select: none; }
 .rz-task-done { text-decoration: line-through; color: #999; }
+/* Thread line numbers get highlighted in the existing line-number span */
+span.line-number[data-rz-thread] {
+  color: #4a90d9 !important; font-weight: bold; cursor: pointer;
+}
+span.line-number[data-rz-thread]:hover { background: rgba(74,144,217,.15); border-radius: 2px; }
 `;
 
 // ── Module-level state ────────────────────────────────────────────────────────
 
-let threadLineSet = new Set();   // line numbers that have existing thread pads
+let threadLineSet = new Set();
 let currentPadId = '';
-let gutterContainer = null;      // fixed div in outer page holding gutter labels
-let aceInnerFrameRef = null;     // <iframe name="ace_inner"> in ace_outer
-let aceOuterElemRef = null;      // <iframe name="ace_outer"> in outer page
-let rafPending = null;           // requestAnimationFrame handle for throttle
+let aceInnerFrameRef = null;
+let rafPending = null;
 
 // ── Thread windows ────────────────────────────────────────────────────────────
 
@@ -143,7 +124,6 @@ function openThreadPad(padId, lineNum) {
   const btns = document.createElement('div');
   btns.className = 'rz-thread-titlebar-btns';
 
-  // Maximize / restore button
   const maximizeBtn = document.createElement('button');
   maximizeBtn.title = 'Maximize';
   maximizeBtn.textContent = '\u2b1c'; // ⬜
@@ -212,7 +192,7 @@ function openThreadPad(padId, lineNum) {
   win.addEventListener('mousedown', () => bringToFront(win), true);
 
   threadLineSet.add(lineNum);
-  scheduleUpdateGutter();
+  scheduleUpdateLineNumbers();
 }
 
 function bringToFront(el) {
@@ -234,7 +214,7 @@ function makeDraggable(el, handle) {
   };
   handle.addEventListener('mousedown', (e) => {
     if (e.target.tagName === 'BUTTON') return;
-    if (el.style.width === '100vw') return; // maximized
+    if (el.style.width === '100vw') return;
     startX = e.clientX; startY = e.clientY;
     startRight = parseInt(el.style.right || '20', 10);
     startBottom = parseInt(el.style.bottom || '20', 10);
@@ -244,71 +224,48 @@ function makeDraggable(el, handle) {
   });
 }
 
-// ── Left gutter: line numbers + thread indicators ─────────────────────────────
+// ── Thread indicators in existing span.line-number elements ───────────────────
 
-function setupGutter(aceInnerFrame) {
+function setupLineNumbers(aceInnerFrame) {
   aceInnerFrameRef = aceInnerFrame;
-
-  if (gutterContainer) gutterContainer.remove();
-  gutterContainer = document.createElement('div');
-  gutterContainer.id = 'rz-gutter';
-  document.body.appendChild(gutterContainer);
-
   try {
-    aceInnerFrame.contentDocument.addEventListener('scroll', scheduleUpdateGutter, {passive: true});
+    aceInnerFrame.contentDocument.addEventListener('scroll', scheduleUpdateLineNumbers, {passive: true});
   } catch (_) {}
-  window.addEventListener('resize', scheduleUpdateGutter);
-
-  scheduleUpdateGutter();
+  window.addEventListener('resize', scheduleUpdateLineNumbers);
+  scheduleUpdateLineNumbers();
 }
 
-function scheduleUpdateGutter() {
+function scheduleUpdateLineNumbers() {
   if (rafPending) return;
   rafPending = requestAnimationFrame(() => {
     rafPending = null;
-    updateGutter();
+    updateLineNumbers();
   });
 }
 
-function updateGutter() {
-  if (!gutterContainer || !aceInnerFrameRef || !aceOuterElemRef) return;
-
-  gutterContainer.innerHTML = '';
-
+function updateLineNumbers() {
+  if (!aceInnerFrameRef) return;
   const innerDoc = aceInnerFrameRef.contentDocument;
-  if (!innerDoc || !innerDoc.body) return;
+  if (!innerDoc) return;
 
-  // Coordinate offsets (viewport-relative)
-  const aceOuterRect = aceOuterElemRef.getBoundingClientRect();
-  const aceInnerRect = aceInnerFrameRef.getBoundingClientRect();
+  // Clear previous thread annotations
+  innerDoc.querySelectorAll('span.line-number[data-rz-thread]').forEach((span) => {
+    span.textContent = span.dataset.rzOrig;
+    delete span.dataset.rzThread;
+    delete span.dataset.rzOrig;
+    span.onclick = null;
+  });
 
-  // Left edge of gutter: start of ace_inner content area in outer viewport
-  const gutterLeft = aceOuterRect.left + aceInnerRect.left;
+  if (threadLineSet.size === 0) return;
 
-  const lines = innerDoc.querySelectorAll('.ace-line');
-  lines.forEach((line, idx) => {
-    const lineRect = line.getBoundingClientRect(); // in ace_inner viewport
-    const top = aceOuterRect.top + aceInnerRect.top + lineRect.top;
-
-    // Skip lines outside the visible editor area
-    if (top + lineRect.height < aceOuterRect.top || top > aceOuterRect.bottom) return;
-
-    const hasThread = threadLineSet.has(idx);
-    const el = document.createElement('div');
-    el.className = 'rz-line-num' + (hasThread ? ' rz-line-num-thread' : '');
-    el.style.top = top + 'px';
-    el.style.left = (gutterLeft - 48) + 'px';
-    el.style.height = lineRect.height + 'px';
-
-    if (hasThread) {
-      el.title = 'Open thread for line ' + (idx + 1);
-      el.innerHTML = (idx + 1) + ' \ud83d\udcac';
-      el.addEventListener('click', () => openThreadPad(currentPadId, idx));
-    } else {
-      el.textContent = String(idx + 1);
-    }
-
-    gutterContainer.appendChild(el);
+  innerDoc.querySelectorAll('.ace-line').forEach((line, idx) => {
+    if (!threadLineSet.has(idx)) return;
+    const numSpan = line.querySelector('span.line-number');
+    if (!numSpan) return;
+    numSpan.dataset.rzOrig = numSpan.textContent;
+    numSpan.dataset.rzThread = '1';
+    numSpan.textContent = numSpan.textContent.trim() + ' \ud83d\udcac';
+    numSpan.onclick = (e) => { e.stopPropagation(); openThreadPad(currentPadId, idx); };
   });
 }
 
@@ -319,7 +276,7 @@ async function loadThreadLines(padId) {
     const r = await fetch('/rizzoma/thread-lines/' + encodeURIComponent(padId));
     const data = await r.json();
     threadLineSet = new Set((data.lines || []).map(Number));
-    scheduleUpdateGutter();
+    scheduleUpdateLineNumbers();
   } catch (_) {}
 }
 
@@ -421,8 +378,7 @@ exports.postAceInit = (hookName, {ace}) => {
     const inner = outer.contentDocument.querySelector('iframe[name="ace_inner"]');
     if (!inner || !inner.contentDocument || !inner.contentDocument.head) return setTimeout(() => trySetup(n + 1), 250);
     injectCSS(inner.contentDocument, INNER_CSS);
-    aceOuterElemRef = outer;
-    setupGutter(inner);
+    setupLineNumbers(inner);
   };
   trySetup(0);
 };
