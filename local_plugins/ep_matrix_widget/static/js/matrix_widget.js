@@ -124,8 +124,72 @@ function waitForEtherpad(cb, attempts) {
   }
 }
 
+function showWidgetUrlBanner() {
+  // Only show when NOT already embedded as a widget
+  if (isMatrixWidget()) return;
+
+  const padId = (window.clientVars && window.clientVars.padId) || '';
+  if (!padId) return;
+
+  const host = window.location.origin;
+  // Matrix Widget API v2 URL template — paste this into Element's "Add widget" dialog
+  const url =
+    host + '/p/' + encodeURIComponent(padId) +
+    '?widgetId=$matrix_widget_id' +
+    '&userId=$matrix_user_id' +
+    '&displayName=$matrix_display_name' +
+    '&parentUrl=$org.matrix.msc2762.as_widget_url';
+
+  const bar = document.createElement('div');
+  bar.id = 'rz-matrix-url-bar';
+  bar.style.cssText =
+    'position:fixed;bottom:0;left:0;right:0;z-index:99998;' +
+    'background:#1d2531;color:#ddd;font:12px/1.4 monospace;' +
+    'padding:6px 10px;display:flex;align-items:center;gap:8px;';
+
+  const label = document.createElement('span');
+  label.textContent = '\ud83e\uddf5 Matrix widget URL:';
+  label.style.cssText = 'color:#7ec8e3;white-space:nowrap;font-family:sans-serif;';
+
+  const urlBox = document.createElement('input');
+  urlBox.type = 'text';
+  urlBox.readOnly = true;
+  urlBox.value = url;
+  urlBox.style.cssText =
+    'flex:1;background:#0d1117;color:#ccc;border:1px solid #444;' +
+    'border-radius:3px;padding:2px 5px;font:12px monospace;';
+  urlBox.addEventListener('click', () => { urlBox.select(); });
+
+  const copyBtn = document.createElement('button');
+  copyBtn.textContent = 'Copy';
+  copyBtn.style.cssText =
+    'background:#4a90d9;color:#fff;border:none;border-radius:3px;' +
+    'cursor:pointer;padding:2px 8px;font-size:12px;white-space:nowrap;';
+  copyBtn.addEventListener('click', () => {
+    navigator.clipboard.writeText(url).then(() => {
+      copyBtn.textContent = 'Copied!';
+      setTimeout(() => { copyBtn.textContent = 'Copy'; }, 1500);
+    });
+  });
+
+  const closeBtn = document.createElement('button');
+  closeBtn.textContent = '\xd7';
+  closeBtn.title = 'Dismiss';
+  closeBtn.style.cssText =
+    'background:transparent;color:#888;border:none;cursor:pointer;' +
+    'font-size:16px;padding:0 4px;';
+  closeBtn.addEventListener('click', () => bar.remove());
+
+  bar.appendChild(label);
+  bar.appendChild(urlBox);
+  bar.appendChild(copyBtn);
+  bar.appendChild(closeBtn);
+  document.body.appendChild(bar);
+}
+
 // Etherpad client hook — called after the ACE editor initialises
 exports.postAceInit = () => {
+  showWidgetUrlBanner();
   if (!isMatrixWidget()) return;
   initMatrixWidget();
 };
