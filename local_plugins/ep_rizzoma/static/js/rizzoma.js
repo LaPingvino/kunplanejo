@@ -7,12 +7,12 @@
  *
  * Thread pads: named  thread--<padId>--line<N>
  *   - Open as draggable/resizable floating iframe
- *   - Maximize button (⤢/⤡) to fill the viewport
+ *   - Maximize button (⬜/⬛) to fill the viewport
  *   - Also openable in a new browser window
  *   - Thread pads receive ?rzParent=<padId>&rzLine=<N> and show a back-link
  *
- * Indicators: small 💬 badge overlaid in the outer page next to any line
- *   that already has a thread pad, refreshed on scroll/resize.
+ * Left gutter: overlaid in the outer page, shows line numbers.
+ *   Lines with a thread show "N 💬" and are clickable.
  */
 
 'use strict';
@@ -57,19 +57,25 @@ const OUTER_CSS = `
 .rz-thread-titlebar-btns button:hover { background: rgba(255,255,255,.2); }
 .rz-thread-win iframe { flex: 1; width: 100%; border: none; }
 
-/* Thread line indicators — fixed in outer page, computed positions */
-#rz-indicators {
+/* Line number gutter — fixed overlay in the outer page */
+#rz-gutter {
   position: fixed; top: 0; left: 0; width: 100%; height: 100%;
   pointer-events: none; z-index: 5000;
 }
-.rz-line-indicator {
+.rz-line-num {
   position: absolute;
-  font-size: 11px; line-height: 1; opacity: 0.6;
-  pointer-events: auto; cursor: pointer;
-  background: rgba(74,144,217,.15); border-radius: 3px; padding: 1px 3px;
-  transition: opacity .15s;
+  width: 44px; text-align: right; padding-right: 4px;
+  font: 11px/1 monospace; color: #bbb;
+  display: flex; align-items: center; justify-content: flex-end;
+  gap: 2px; box-sizing: border-box;
+  pointer-events: none;
 }
-.rz-line-indicator:hover { opacity: 1; }
+.rz-line-num-thread {
+  color: #4a90d9; font-weight: bold;
+  pointer-events: auto; cursor: pointer;
+  background: rgba(74,144,217,.08); border-radius: 3px;
+}
+.rz-line-num-thread:hover { background: rgba(74,144,217,.2); }
 
 /* Parent back-link banner (shown in thread pads) */
 #rz-parent-banner {
@@ -85,7 +91,9 @@ const OUTER_CSS = `
 }
 `;
 
+// Left margin for the inner editor body so gutter doesn't overlap text
 const INNER_CSS = `
+#innerdocbody { margin-left: 48px !important; }
 .rz-cb { cursor: pointer; margin-right: 4px; user-select: none; }
 .rz-task-done { text-decoration: line-through; color: #999; }
 `;
@@ -94,9 +102,10 @@ const INNER_CSS = `
 
 let threadLineSet = new Set();   // line numbers that have existing thread pads
 let currentPadId = '';
-let indicatorContainer = null;   // fixed div in outer page holding the badges
+let gutterContainer = null;      // fixed div in outer page holding gutter labels
 let aceInnerFrameRef = null;     // <iframe name="ace_inner"> in ace_outer
 let aceOuterElemRef = null;      // <iframe name="ace_outer"> in outer page
+let rafPending = null;           // requestAnimationFrame handle for throttle
 
 // ── Thread windows ────────────────────────────────────────────────────────────
 
@@ -152,7 +161,7 @@ function openThreadPad(padId, lineNum) {
         width: '100vw', height: '100vh',
         resize: 'none', borderRadius: '0',
       });
-      maximizeBtn.textContent = '\u2b1b'; // ⬛ (restore)
+      maximizeBtn.textContent = '\u2b1b'; // ⬛ restore
       maximizeBtn.title = 'Restore';
     } else {
       Object.assign(win.style, {
@@ -163,7 +172,7 @@ function openThreadPad(padId, lineNum) {
         top: 'auto', left: 'auto',
         resize: 'both', borderRadius: '6px',
       });
-      maximizeBtn.textContent = '\u2b1c'; // ⬜
+      maximizeBtn.textContent = '\u2b1c';
       maximizeBtn.title = 'Maximize';
     }
   });
@@ -200,12 +209,10 @@ function openThreadPad(padId, lineNum) {
   document.body.appendChild(win);
 
   makeDraggable(win, titlebar);
-
   win.addEventListener('mousedown', () => bringToFront(win), true);
 
-  // Mark line as having a thread, refresh indicators
   threadLineSet.add(lineNum);
-  updateIndicators();
+  scheduleUpdateGutter();
 }
 
 function bringToFront(el) {
@@ -227,7 +234,7 @@ function makeDraggable(el, handle) {
   };
   handle.addEventListener('mousedown', (e) => {
     if (e.target.tagName === 'BUTTON') return;
-    if (isMaximized(el)) return;
+    if (el.style.width === '100vw') return; // maximized
     startX = e.clientX; startY = e.clientY;
     startRight = parseInt(el.style.right || '20', 10);
     startBottom = parseInt(el.style.bottom || '20', 10);
@@ -237,63 +244,71 @@ function makeDraggable(el, handle) {
   });
 }
 
-function isMaximized(win) {
-  return win.style.width === '100vw';
-}
+// ── Left gutter: line numbers + thread indicators ─────────────────────────────
 
-// ── Thread line indicators (fixed in outer page) ───────────────────────────────
-
-function setupIndicators(aceInnerFrame) {
+function setupGutter(aceInnerFrame) {
   aceInnerFrameRef = aceInnerFrame;
-  // aceOuterElemRef already set before this call
 
-  if (indicatorContainer) indicatorContainer.remove();
-  indicatorContainer = document.createElement('div');
-  indicatorContainer.id = 'rz-indicators';
-  document.body.appendChild(indicatorContainer);
+  if (gutterContainer) gutterContainer.remove();
+  gutterContainer = document.createElement('div');
+  gutterContainer.id = 'rz-gutter';
+  document.body.appendChild(gutterContainer);
 
   try {
-    aceInnerFrame.contentDocument.addEventListener('scroll', updateIndicators, {passive: true});
+    aceInnerFrame.contentDocument.addEventListener('scroll', scheduleUpdateGutter, {passive: true});
   } catch (_) {}
-  window.addEventListener('resize', updateIndicators);
+  window.addEventListener('resize', scheduleUpdateGutter);
 
-  updateIndicators();
+  scheduleUpdateGutter();
 }
 
-function updateIndicators() {
-  if (!indicatorContainer || !aceInnerFrameRef || !aceOuterElemRef) return;
+function scheduleUpdateGutter() {
+  if (rafPending) return;
+  rafPending = requestAnimationFrame(() => {
+    rafPending = null;
+    updateGutter();
+  });
+}
 
-  indicatorContainer.innerHTML = '';
-  if (threadLineSet.size === 0) return;
+function updateGutter() {
+  if (!gutterContainer || !aceInnerFrameRef || !aceOuterElemRef) return;
+
+  gutterContainer.innerHTML = '';
 
   const innerDoc = aceInnerFrameRef.contentDocument;
   if (!innerDoc || !innerDoc.body) return;
 
-  // aceOuterRect: position of ace_outer iframe in the outer page viewport
+  // Coordinate offsets (viewport-relative)
   const aceOuterRect = aceOuterElemRef.getBoundingClientRect();
-  // aceInnerRect: position of ace_inner iframe within ace_outer's viewport
   const aceInnerRect = aceInnerFrameRef.getBoundingClientRect();
+
+  // Left edge of gutter: start of ace_inner content area in outer viewport
+  const gutterLeft = aceOuterRect.left + aceInnerRect.left;
 
   const lines = innerDoc.querySelectorAll('.ace-line');
   lines.forEach((line, idx) => {
-    if (!threadLineSet.has(idx)) return;
-    // lineRect: position of line in ace_inner's viewport
-    const lineRect = line.getBoundingClientRect();
+    const lineRect = line.getBoundingClientRect(); // in ace_inner viewport
+    const top = aceOuterRect.top + aceInnerRect.top + lineRect.top;
 
-    // Combined position in outer page viewport (for position:fixed inside #rz-indicators)
-    const top = aceOuterRect.top + aceInnerRect.top + lineRect.top + lineRect.height / 2 - 8;
+    // Skip lines outside the visible editor area
+    if (top + lineRect.height < aceOuterRect.top || top > aceOuterRect.bottom) return;
 
-    // Only render if vertically within the editor area
-    if (top < aceOuterRect.top || top > aceOuterRect.bottom) return;
+    const hasThread = threadLineSet.has(idx);
+    const el = document.createElement('div');
+    el.className = 'rz-line-num' + (hasThread ? ' rz-line-num-thread' : '');
+    el.style.top = top + 'px';
+    el.style.left = (gutterLeft - 48) + 'px';
+    el.style.height = lineRect.height + 'px';
 
-    const badge = document.createElement('div');
-    badge.className = 'rz-line-indicator';
-    badge.title = 'Thread exists \u2014 click to open';
-    badge.textContent = '\ud83d\udcac'; // 💬
-    badge.style.top = top + 'px';
-    badge.style.right = Math.max(2, window.innerWidth - aceOuterRect.right + 4) + 'px';
-    badge.addEventListener('click', () => openThreadPad(currentPadId, idx));
-    indicatorContainer.appendChild(badge);
+    if (hasThread) {
+      el.title = 'Open thread for line ' + (idx + 1);
+      el.innerHTML = (idx + 1) + ' \ud83d\udcac';
+      el.addEventListener('click', () => openThreadPad(currentPadId, idx));
+    } else {
+      el.textContent = String(idx + 1);
+    }
+
+    gutterContainer.appendChild(el);
   });
 }
 
@@ -304,7 +319,7 @@ async function loadThreadLines(padId) {
     const r = await fetch('/rizzoma/thread-lines/' + encodeURIComponent(padId));
     const data = await r.json();
     threadLineSet = new Set((data.lines || []).map(Number));
-    updateIndicators();
+    scheduleUpdateGutter();
   } catch (_) {}
 }
 
@@ -324,7 +339,6 @@ function maybeShowParentBanner() {
     '" target="_blank">' + esc(parentPad) + lineLabel + '</a>' +
     '<button id="rz-parent-banner-close" title="Dismiss">\xd7</button>';
 
-  // body is guaranteed to exist at postAceInit time, but prepend anyway
   if (document.body) {
     document.body.prepend(banner);
   } else {
@@ -394,8 +408,8 @@ exports.postAceInit = (hookName, {ace}) => {
     const inner = outer.contentDocument.querySelector('iframe[name="ace_inner"]');
     if (!inner || !inner.contentDocument || !inner.contentDocument.head) return setTimeout(() => trySetup(n + 1), 250);
     injectCSS(inner.contentDocument, INNER_CSS);
-    aceOuterElemRef = outer;   // store outer iframe reference for coord calculation
-    setupIndicators(inner);
+    aceOuterElemRef = outer;
+    setupGutter(inner);
   };
   trySetup(0);
 };
