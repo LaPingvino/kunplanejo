@@ -83,6 +83,13 @@ span.line-number[data-rz-thread] {
   color: #4a90d9 !important; font-weight: bold; cursor: pointer;
 }
 span.line-number[data-rz-thread]:hover { background: rgba(74,144,217,.15); border-radius: 2px; }
+.rz-hover-btn {
+  position: fixed; display: none;
+  background: #4a90d9; color: #fff; border: none; border-radius: 3px;
+  cursor: pointer; font-size: 12px; padding: 1px 5px; z-index: 200;
+  opacity: 0.8; transition: opacity .1s;
+}
+.rz-hover-btn:hover { opacity: 1; display: block; }
 `;
 
 // ── Module-level state ────────────────────────────────────────────────────────
@@ -236,7 +243,52 @@ function setupLineNumbers(aceInnerFrame) {
     aceInnerFrame.contentDocument.addEventListener('scroll', scheduleUpdateLineNumbers, {passive: true});
   } catch (_) {}
   window.addEventListener('resize', scheduleUpdateLineNumbers);
+
+  // #sidedivinner may not be populated yet — retry a few times after render
   scheduleUpdateLineNumbers();
+  setTimeout(scheduleUpdateLineNumbers, 500);
+  setTimeout(scheduleUpdateLineNumbers, 1500);
+
+  setupHoverButton(aceInnerFrame.ownerDocument);
+}
+
+function setupHoverButton(aceOuterDoc) {
+  const sidedivInner = aceOuterDoc.getElementById('sidedivinner');
+  if (!sidedivInner) return;
+
+  const btn = aceOuterDoc.createElement('button');
+  btn.className = 'rz-hover-btn';
+  btn.textContent = '\ud83d\udcac';
+  btn.title = 'Open/create thread for this line';
+  aceOuterDoc.body.appendChild(btn);
+
+  let hoverIdx = -1;
+  let hideTimer = null;
+
+  const showBtn = (div) => {
+    clearTimeout(hideTimer);
+    const divs = [...sidedivInner.querySelectorAll(':scope > div')];
+    hoverIdx = divs.indexOf(div);
+    const rect = div.getBoundingClientRect();
+    btn.style.top = (rect.top + rect.height / 2 - 9) + 'px';
+    btn.style.left = (rect.right + 2) + 'px';
+    btn.style.display = 'block';
+  };
+
+  const hideBtn = () => {
+    hideTimer = setTimeout(() => { btn.style.display = 'none'; }, 250);
+  };
+
+  sidedivInner.addEventListener('mouseover', (e) => {
+    const div = e.target.closest('#sidedivinner > div');
+    if (div) showBtn(div);
+  });
+  sidedivInner.addEventListener('mouseleave', hideBtn);
+  btn.addEventListener('mouseenter', () => clearTimeout(hideTimer));
+  btn.addEventListener('mouseleave', hideBtn);
+  btn.addEventListener('click', () => {
+    if (hoverIdx >= 0) openThreadPad(currentPadId, hoverIdx);
+  });
 }
 
 function scheduleUpdateLineNumbers() {
@@ -284,7 +336,10 @@ async function loadThreadLines(padId) {
     const r = await fetch('/rizzoma/thread-lines/' + encodeURIComponent(padId));
     const data = await r.json();
     threadLineSet = new Set((data.lines || []).map(Number));
+    // Retry a few times: sidedivinner may still be empty when the fetch resolves
     scheduleUpdateLineNumbers();
+    setTimeout(scheduleUpdateLineNumbers, 500);
+    setTimeout(scheduleUpdateLineNumbers, 1500);
   } catch (_) {}
 }
 
