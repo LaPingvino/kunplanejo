@@ -326,9 +326,22 @@ async function loadThreadLines(padId) {
 // ── Parent back-link banner (shown when pad opened as a thread) ───────────────
 
 function maybeShowParentBanner() {
+  // Prefer URL params (exact original padId), fall back to parsing the pad name itself.
+  // Thread pads are named  thread--<sanitisedParentId>--line<N>  so we can always
+  // detect the parent without requiring the caller to pass query params.
   const params = new URLSearchParams(window.location.search);
-  const parentPad = params.get('rzParent');
-  const line = params.get('rzLine');
+  let parentPad = params.get('rzParent');
+  let line = params.get('rzLine');
+
+  if (!parentPad) {
+    const padId = (window.clientVars && window.clientVars.padId) || '';
+    const m = padId.match(/^thread--(.+)--line(\d+)$/);
+    if (m) {
+      parentPad = m[1];
+      line = m[2];
+    }
+  }
+
   if (!parentPad) return;
 
   const banner = document.createElement('div');
