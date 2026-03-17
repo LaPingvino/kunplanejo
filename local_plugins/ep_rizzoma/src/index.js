@@ -8,7 +8,9 @@ exports.aceAttribsToClasses = (hookName, args) => {
   return [];
 };
 
-exports.expressCreateServer = (hookName, {app, padManager}) => {
+const padManager = require('ep_etherpad-lite/src/node/db/PadManager');
+
+exports.expressCreateServer = (hookName, {app}) => {
   // List which line numbers already have a thread sub-pad for a given pad.
   // Thread pads are named  thread--<sanitisedPadId>--line<N>
   app.delete('/rizzoma/thread/:threadPadId', async (req, res) => {
